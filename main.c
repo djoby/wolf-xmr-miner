@@ -1,3 +1,4 @@
+// {{{ Includes
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -9,9 +10,7 @@
 #ifdef __x86_64__
 #include <cpuid.h>
 #endif
-
 #ifdef __linux__
-
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -19,25 +18,25 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sched.h>
-
 #else
-
 #include <winsock2.h>
 #undef __cpuid
-
 #endif
-
 #include "cryptonight.h"
 #include "minerutils.h"
 #include "minerlog.h"
 #include "minernet.h"
 #include "stratum.h"
 #include "miner.h"
+// }}} Includes
 
+// {{{ Defines
 #define STRATUM_TIMEOUT_SECONDS			120
 #define STRATUM_MAX_MESSAGE_LEN_BYTES	4096
 #define JSON_BUF_LEN	345
+// }}} Defines
 
+// {{{ Typedefs
 typedef struct _StatusInfo
 {
 	uint64_t SolvedWork;
@@ -45,11 +44,6 @@ typedef struct _StatusInfo
 	double *ThreadHashCounts;
 	double *ThreadTimes;
 } StatusInfo;
-
-pthread_mutex_t StatusMutex = PTHREAD_MUTEX_INITIALIZER;
-StatusInfo GlobalStatus;
-
-static cryptonight_func *cryptonight_hash_ctx;
 
 typedef struct _WorkerInfo
 {
@@ -71,14 +65,6 @@ typedef struct _PoolInfo
 	char XMRAuthID[64];
 } PoolInfo;
 
-atomic_bool *RestartMining;
-
-bool ExitFlag = false;
-int ExitPipe[2];
-
-JobInfo Jobs[2];
-volatile JobInfo *CurrentJob;
-volatile int JobIdx;
 
 typedef struct _Share
 {
@@ -95,8 +81,74 @@ typedef struct _ShareQueue
 	Share *last;
 } ShareQueue;
 
-Share *ShareList;
+typedef struct _PoolBroadcastInfo
+{
+	int poolsocket;
+	WorkerInfo WorkerData;
+} PoolBroadcastInfo;
 
+// AlgoName must not be freed by the thread - cleanup is done by caller.
+// RequestedWorksize and RequestedxIntensity should be zero if none was requested
+typedef struct _MinerThreadInfo
+{
+	uint32_t ThreadID;
+	uint32_t TotalMinerThreads;
+} MinerThreadInfo;
+
+// Signed types indicate there is no default value
+// If they are negative, do not set them.
+typedef struct _DeviceSettings
+{
+	uint32_t Platform;
+	uint32_t Index;
+	uint32_t Threads;
+	uint32_t rawIntensity;
+	uint32_t Worksize;
+	int32_t CoreFreq;
+	int32_t MemFreq;
+	int32_t FanSpeedPercent;
+	int32_t PowerTune;
+} DeviceSettings;
+
+// Settings structure for a group of threads mining one algo.
+// These threads may be running on diff GPUs, and there may
+// be multiple threads per GPU.
+typedef struct _AlgoSettings
+{
+	char *AlgoName;
+	uint32_t NumGPUs;
+	DeviceSettings *GPUSettings;
+	uint32_t TotalThreads;
+	uint32_t PoolCount;
+	char **PoolURLs;
+	WorkerInfo *Workers;
+	json_t *AlgoSpecificConfig;
+} AlgoSettings;
+// }}} Typedefs
+
+// {{{ Globals
+pthread_mutex_t StatusMutex = PTHREAD_MUTEX_INITIALIZER;
+
+StatusInfo GlobalStatus;
+
+static cryptonight_func *cryptonight_hash_ctx;
+
+atomic_bool *RestartMining;
+
+bool ExitFlag = false;
+int ExitPipe[2];
+
+JobInfo Jobs[2];
+volatile JobInfo *CurrentJob;
+volatile int JobIdx;
+
+Share *ShareList;
+ShareQueue CurrentQueue;
+pthread_mutex_t QueueMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t QueueCond = PTHREAD_COND_INITIALIZER;
+// }}} Globals
+
+// {{{ Functions
 Share *GetShare()
 {
 	Share *ret;
@@ -129,16 +181,6 @@ void FreeShare(Share *share)
 	share->next = ShareList;
 	ShareList = share;
 }
-
-ShareQueue CurrentQueue;
-pthread_mutex_t QueueMutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t QueueCond = PTHREAD_COND_INITIALIZER;
-
-typedef struct _PoolBroadcastInfo
-{
-	int poolsocket;
-	WorkerInfo WorkerData;
-} PoolBroadcastInfo;
 
 int sendit(int fd, char *buf, int len)
 {
@@ -483,14 +525,6 @@ reauth:
 	}
 }
 
-// AlgoName must not be freed by the thread - cleanup is done by caller.
-// RequestedWorksize and RequestedxIntensity should be zero if none was requested
-typedef struct _MinerThreadInfo
-{
-	uint32_t ThreadID;
-	uint32_t TotalMinerThreads;
-} MinerThreadInfo;
-
 // Block header is 2 uint512s, 1024 bits - 128 bytes
 void *MinerThreadProc(void *Info)
 {
@@ -583,59 +617,27 @@ void *MinerThreadProc(void *Info)
 }
 
 #ifdef __linux__
-
 void SigHandler(int signal)
 {
 	char c;
 	ExitFlag = true;
 	write(ExitPipe[1], &c, 1);
 }
-
 #else
-
 BOOL SigHandler(DWORD signal)
 {
 	ExitFlag = true;
 
 	return(TRUE);
 }
-
 #endif
-
-// Signed types indicate there is no default value
-// If they are negative, do not set them.
-
-typedef struct _DeviceSettings
-{
-	uint32_t Platform;
-	uint32_t Index;
-	uint32_t Threads;
-	uint32_t rawIntensity;
-	uint32_t Worksize;
-	int32_t CoreFreq;
-	int32_t MemFreq;
-	int32_t FanSpeedPercent;
-	int32_t PowerTune;
-} DeviceSettings;
-
-// Settings structure for a group of threads mining one algo.
-// These threads may be running on diff GPUs, and there may
-// be multiple threads per GPU.
-
-typedef struct _AlgoSettings
-{
-	char *AlgoName;
-	uint32_t NumGPUs;
-	DeviceSettings *GPUSettings;
-	uint32_t TotalThreads;
-	uint32_t PoolCount;
-	char **PoolURLs;
-	WorkerInfo *Workers;
-	json_t *AlgoSpecificConfig;
-} AlgoSettings;
 
 int ParseConfigurationFile(char *ConfigFileName, AlgoSettings *Settings)
 {
+	/* TODO: let s start here
+	 *
+	 */
+
 	json_t *Config;
 	json_error_t Error;
 	
@@ -1044,4 +1046,4 @@ int main(int argc, char **argv)
 	
 	return(0);
 }
-
+// }}} Functions
