@@ -531,7 +531,6 @@ __asm__(
 static inline void aes_pseudo_round(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, int nblocks)
 {
 	const uint8x16_t *k = (const uint8x16_t *)expandedKey, zero = {0};
-	uint8x16_t tmp;
 	int i;
 
 	for (i=0; i<nblocks; i++)
@@ -566,7 +565,6 @@ static inline void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const u
 {
 	const uint8x16_t *k = (const uint8x16_t *)expandedKey;
 	const uint8x16_t *x = (const uint8x16_t *)xor;
-	uint8x16_t tmp;
 	int i;
 
 	for (i=0; i<nblocks; i++)

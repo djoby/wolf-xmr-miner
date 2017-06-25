@@ -35,9 +35,8 @@
 #include "miner.h"
 
 #define STRATUM_TIMEOUT_SECONDS			120
-
-// I know, it's lazy.
 #define STRATUM_MAX_MESSAGE_LEN_BYTES	4096
+#define JSON_BUF_LEN	345
 
 typedef struct _StatusInfo
 {
@@ -155,65 +154,8 @@ int sendit(int fd, char *buf, int len)
 	return rc < 1 ? -1 : 0;
 }
 
-#define BIG_BUF_LEN	262144
-void *DaemonUpdateThreadProc(void *Info)
-{
-	uint64_t id = 10;
-	PoolInfo *pbinfo = (PoolInfo *)Info;
-	char s[BIG_BUF_LEN];
-	void *c_ctx = cryptonight_ctx();
-
-	pthread_mutex_lock(&QueueMutex);
-	for(;;)
-	{
-		pthread_cond_wait(&QueueCond, &QueueMutex);
-		for(Share *CurShare = RemoveShare(&CurrentQueue); CurShare; CurShare = RemoveShare(&CurrentQueue))
-		{
-			char ASCIINonce[9];
-			char *ptr;
-			int ret, len, hdrlen;
-
-			if (!CurShare->Job->blockblob)
-			{
-				sleep(1);
-				continue;
-			}
-			BinaryToASCIIHex(ASCIINonce, &CurShare->Nonce, 4U);
-			memcpy(CurShare->Job->blockblob+78, ASCIINonce, 8);
-
-			hdrlen = sprintf(s, "POST /json_rpc HTTP/1.0\r\nContent-Length: xxx\r\n\r\n");
-			ptr = s + hdrlen;
-
-			len = snprintf(ptr, BIG_BUF_LEN - hdrlen, "{\"method\": \"submitblock\", \"params\": "
-				"[\"%s\"]}", CurShare->Job->blockblob);
-			sprintf(ptr - 7, "%d", len);
-			ptr[-4] = '\r';
-
-			free(CurShare->Job->blockblob);
-			CurShare->Job->blockblob = NULL;
-			FreeShare(CurShare);
-
-			ret = sendit(pbinfo->sockfd, s, len + hdrlen);
-			if (ret == -1)
-				break;
-
-			pthread_mutex_lock(&StatusMutex);
-			GlobalStatus.SolvedWork++;
-			pthread_mutex_unlock(&StatusMutex);
-
-			Log(LOG_NETDEBUG, "Request: %s", s);
-		}
-	}
-	pthread_mutex_unlock(&QueueMutex);
-	// free(c_ctx);
-	return(NULL);
-}
-
-#define JSON_BUF_LEN	345
-
 void *PoolBroadcastThreadProc(void *Info)
 {
-	uint64_t id = 10;
 	PoolInfo *pbinfo = (PoolInfo *)Info;
 	char s[JSON_BUF_LEN];
 	void *c_ctx = cryptonight_ctx();
@@ -267,245 +209,13 @@ static void RestartMiners(PoolInfo *Pool)
 		atomic_store(RestartMining + i, true);
 }
 
-static const char getblkc[] = "POST /json_rpc HTTP/1.0\r\nContent-Length: 27\r\n\r\n"
-	"{\"method\": \"getblockcount\"}";
-
-#define WALLETLEN	95
-
-static char getblkt[] = "POST /json_rpc HTTP/1.0\r\nContent-Length: 178\r\n\r\n"
-	"{\"method\": \"getblocktemplate\", \"params\": {\"reserve_size\": 8, \"wallet_address\": "
-	"\"9xaXMreKDK7bctpHtTE9zUUTgffkRvwZJ7UvyJGAQHkvBFqUYWwhVWWendW6NAdvtB8nn883WQxtU7cpe5eyJiUxLZ741t5\"}}";
-
-void *DaemonThreadProc(void *InfoPtr)
-{
-	PoolInfo *Pool = (PoolInfo *)InfoPtr;
-	JobInfo *NextJob;
-	char *l, *crlf;
-	int poolsocket, ret;
-	size_t PartialMessageOffset;
-	char rawresponse[BIG_BUF_LEN];
-	int len, delay = 32;
-	int rlen;
-	uint64_t height, prevheight = 0;
-	time_t job_time;
-
-	poolsocket = Pool->sockfd;
-
-	if (strlen(Pool->WorkerData.User) != WALLETLEN)
-	{
-		Log(LOG_ERROR, "Invalid username / wallet address\n");
-		return(NULL);
-	}
-	memcpy(getblkt+128, Pool->WorkerData.User, WALLETLEN);
-
-	ret = sendit(poolsocket, (char *)getblkt, sizeof(getblkt)-1);
-	if (ret == -1)
-		return(NULL);
-
-	NextJob = &Jobs[0];
-	PartialMessageOffset = 0;
-	l = NULL;
-	crlf = NULL;
-	rlen = 0;
-
-	// Listen for work until termination.
-	for(;;)
-	{
-		char *tmsg;
-		int mlen;
-
-		// receive
-		ret = recv(poolsocket, rawresponse + PartialMessageOffset, 256, 0);
-		if (ret <= 0)
-		{
-fail:
-			closesocket(poolsocket);
-			RestartMiners(Pool);
-retry:
-			poolsocket = Pool->sockfd = ConnectToPool(Pool->StrippedURL, Pool->Port);
-
-			if(poolsocket == INVALID_SOCKET)
-			{
-				Log(LOG_ERROR, "Unable to reconnect to daemon. Sleeping 10 seconds...\n");
-				sleep(10);
-				goto retry;
-			}
-
-			ret = sendit(poolsocket, (char *)getblkc, sizeof(getblkc)-1);
-			if (ret == -1)
-				return(NULL);
-
-			PartialMessageOffset = 0;
-			l = NULL;
-			crlf = NULL;
-			rlen = 0;
-			continue;
-		}
-		PartialMessageOffset += ret;
-		rawresponse[PartialMessageOffset] = 0x00;
-		if (!l)
-		{
-			l = strstr(rawresponse, "Content-Length: ");
-			if (!l)
-				continue;
-		}
-
-		if (!crlf)
-		{
-			crlf = strstr(l, "\r\n\r\n");
-			if (!crlf)
-				continue;
-		}
-
-		if (!rlen)
-		{
-			if (sscanf(l + sizeof("Content-Length:"), "%d", &rlen) != 1)
-			{
-				goto fail;
-			}
-			tmsg = crlf + 4;
-			tmsg[rlen] = 0;
-		}
-		mlen = PartialMessageOffset - (crlf - rawresponse) - 4;
-		mlen = rlen - mlen;
-		if (mlen)
-		{
-			ret = recv(poolsocket, rawresponse + PartialMessageOffset, mlen, 0);
-			if (ret <= 0)
-				goto fail;
-			PartialMessageOffset += ret;
-			if (ret < mlen)
-				continue;
-		}
-
-		// We now have a complete message
-		PartialMessageOffset = 0;
-		l = NULL;
-		crlf = NULL;
-		rlen = 0;
-
-		json_t *msg, *result, *err;
-		double TotalHashrate = 0;
-
-		Log(LOG_NETDEBUG, "Got something: %s", tmsg);
-		msg = json_loads(tmsg, 0, NULL);
-		if(!msg)
-		{
-			Log(LOG_CRITICAL, "Error parsing JSON from daemon.");
-			closesocket(poolsocket);
-			return(NULL);
-		}
-		result = json_object_get(msg, "result");
-		if (result)
-		{
-			json_t *jcount, *jheight;
-			if ((jcount = json_object_get(result, "count")))
-			{
-				height = json_integer_value(jcount);
-				// new height, get the block info
-				if (height != prevheight)
-				{
-					ret = sendit(poolsocket, getblkt, sizeof(getblkt)-1);
-					if (ret == -1)
-						return(NULL);
-					json_decref(msg);
-					continue;
-				}
-				// height is the same, wait and poll again
-			} else if ((jheight = json_object_get(result, "height")))
-			{
-				height = json_integer_value(jheight);
-				const char *tmpl = json_string_value(json_object_get(result, "blocktemplate_blob"));
-				const char *hasher = json_string_value(json_object_get(result, "blockhashing_blob"));
-				uint64_t diff = json_integer_value(json_object_get(result, "difficulty"));
-				NextJob->XMRBlobLen = strlen(hasher) / 2;
-				ASCIIHexToBinary(NextJob->XMRBlob, hasher, NextJob->XMRBlobLen * 2);
-				Log(LOG_NOTIFY, "New block at diff %lu", diff);
-				diff = 0xffffffffffffffffUL / diff;
-				NextJob->XMRTarget = diff;
-				NextJob->blockblob = strdup(tmpl);
-				CurrentJob = NextJob;
-				JobIdx++;
-				NextJob = &Jobs[JobIdx&1];
-				RestartMiners(Pool);
-				// reduce polling frequency right after
-				// a new block has been announced.
-				delay = 32;
-				prevheight = height;
-				time(&job_time);
-				job_time += 240;
-			}
-			if (jcount || jheight)
-			{
-				struct timeval timeout;
-				timeout.tv_sec = delay;
-				timeout.tv_usec = 0;
-				// reduce delay between polls
-				if (delay > 1)
-					delay >>= 1;
-				fd_set readfds;
-				FD_ZERO(&readfds);
-				FD_SET(poolsocket, &readfds);
-				ret = select(poolsocket + 1, &readfds, NULL, NULL, &timeout);
-				if(ret != 1 || !FD_ISSET(poolsocket, &readfds))
-				{
-					// reduce polling impact:
-					// getblockcount is nearly zero cost
-					// but get a new template if we've spent too long on this job
-					if (time(NULL) > job_time)
-						ret = sendit(Pool->sockfd, (char *)getblkt, sizeof(getblkt)-1);
-					else
-						ret = sendit(Pool->sockfd, (char *)getblkc, sizeof(getblkc)-1);
-					if (ret == -1)
-						return(NULL);
-				}
-				json_decref(msg);
-				continue;
-			}
-		}
-		err = json_object_get(msg, "error");
-		pthread_mutex_lock(&StatusMutex);
-
-		if(!err && !strcmp(json_string_value(json_object_get(result, "status")), "OK"))
-		{
-			Log(LOG_INFO, "Block accepted: %d/%d (%.02f%%)", GlobalStatus.SolvedWork - GlobalStatus.RejectedWork, GlobalStatus.SolvedWork, (double)(GlobalStatus.SolvedWork - GlobalStatus.RejectedWork) / GlobalStatus.SolvedWork * 100.0);
-		}
-		else
-		{
-			const char *errmsg;
-			GlobalStatus.RejectedWork++;
-			errmsg = json_string_value(json_object_get(err, "message"));
-			Log(LOG_INFO, "Block rejected (%s): %d/%d (%.02f%%)", errmsg, GlobalStatus.SolvedWork - GlobalStatus.RejectedWork, GlobalStatus.SolvedWork, (double)(GlobalStatus.SolvedWork - GlobalStatus.RejectedWork) / GlobalStatus.SolvedWork * 100.0);
-			if (!JobIdx)
-				return(NULL);
-		}
-
-		for(int i = 0; i < Pool->MinerThreadCount; ++i)
-		{
-			TotalHashrate += GlobalStatus.ThreadHashCounts[i] / GlobalStatus.ThreadTimes[i];
-		}
-
-		Log(LOG_INFO, "Total Hashrate: %.02fH/s\n", TotalHashrate);
-
-		pthread_mutex_unlock(&StatusMutex);
-
-		json_decref(msg);
-		ret = sendit(Pool->sockfd, (char *)getblkt, sizeof(getblkt)-1);
-		if (ret == -1)
-			return(NULL);
-	}
-}
-
 void *StratumThreadProc(void *InfoPtr)
 {
-	uint64_t id = 1;
 	JobInfo *NextJob;
-	char *workerinfo[3];
-	int poolsocket, bytes, ret;
+	int poolsocket, ret;
 	size_t PartialMessageOffset;
-	char rawresponse[STRATUM_MAX_MESSAGE_LEN_BYTES], partial[STRATUM_MAX_MESSAGE_LEN_BYTES];
+	char rawresponse[STRATUM_MAX_MESSAGE_LEN_BYTES];
 	PoolInfo *Pool = (PoolInfo *)InfoPtr;
-	bool GotSubscriptionResponse = false, GotFirstJob = false;
 	char s[JSON_BUF_LEN];
 	int len;
 	
@@ -587,7 +297,6 @@ reauth:
 		while(strchr(rawresponse + bufidx, '\n'))
 		{
 			json_t *msg, *msgid, *method;
-			json_error_t err;
 			
 			MsgLen = strchr(rawresponse + bufidx, '\n') - (rawresponse + bufidx) + 1;
 			memcpy(StratumMsg, rawresponse + bufidx, MsgLen);
@@ -699,7 +408,7 @@ reauth:
 					const char *val = json_string_value(blob);
 					NextJob->XMRBlobLen = strlen(val) / 2;
 					ASCIIHexToBinary(NextJob->XMRBlob, val, NextJob->XMRBlobLen * 2);
-					strcpy(NextJob->ID, json_string_value(jid));
+					strcpy((char *) NextJob->ID, json_string_value(jid));
 					NextJob->XMRTarget = __builtin_bswap32(strtoul(json_string_value(target), NULL, 16));
 					CurrentJob = NextJob;
 					JobIdx++;
@@ -748,7 +457,7 @@ reauth:
 					const char *val = json_string_value(blob);
 					NextJob->XMRBlobLen = strlen(val) / 2;
 					ASCIIHexToBinary(NextJob->XMRBlob, val, NextJob->XMRBlobLen * 2);
-					strcpy(NextJob->ID, json_string_value(jid));
+					strcpy((char *) NextJob->ID, json_string_value(jid));
 					NextJob->XMRTarget = __builtin_bswap32(strtoul(json_string_value(target), NULL, 16));
 					CurrentJob = NextJob;
 					JobIdx++;
@@ -785,8 +494,6 @@ typedef struct _MinerThreadInfo
 // Block header is 2 uint512s, 1024 bits - 128 bytes
 void *MinerThreadProc(void *Info)
 {
-	int32_t err;
-	double CurrentDiff;
 	int MyJobIdx;
 	JobInfo *MyJob;
 	char ThrID[128];
@@ -796,7 +503,6 @@ void *MinerThreadProc(void *Info)
 	MinerThreadInfo *MTInfo = (MinerThreadInfo *)Info;
 	uint32_t StartNonce = (0xFFFFFFFFU / MTInfo->TotalMinerThreads) * MTInfo->ThreadID;
 	uint32_t MaxNonce = StartNonce + (0xFFFFFFFFU / MTInfo->TotalMinerThreads);
-	uint32_t Nonce = StartNonce, PrevNonce, platform = 0, device = 1, CurENonce2;
 	struct cryptonight_ctx *ctx;
 	uint32_t *nonceptr = (uint32_t *)((char *)TmpWork + 39);
 	unsigned long hashes_done;
@@ -837,7 +543,6 @@ void *MinerThreadProc(void *Info)
 		uint32_t n = first_nonce - 1;
 		uint64_t hash[32/8] __attribute__((aligned(64)));
 		int found = 0;
-again:
 		do {
 			if (ExitFlag) break;
 			*nonceptr = ++n;
@@ -1165,12 +870,9 @@ int main(int argc, char **argv)
 	PoolInfo Pool = {0};
 	AlgoSettings Settings;
 	MinerThreadInfo *MThrInfo;
-	int ret, poolsocket, PlatformIdx = 0;
-	pthread_t Stratum, ADLThread, BroadcastThread, *MinerWorker;
-	unsigned int tmp1, tmp2, tmp3, tmp4;
-	int use_aesni = 0;
-	int daemon = 0;
-	
+	int ret, poolsocket;
+	pthread_t Stratum, BroadcastThread, *MinerWorker;
+
 	InitLogging(LOG_INFO);
 	
 	if(argc != 2)
@@ -1184,6 +886,9 @@ int main(int argc, char **argv)
 #ifdef __aarch64__
 	cryptonight_hash_ctx = cryptonight_hash_aesni;
 #else
+	int use_aesni = 0;
+	unsigned int tmp1, tmp2, tmp3, tmp4;
+
 	if (__get_cpuid_max(0, &tmp1) >= 1) {
 		__get_cpuid(1, &tmp1, &tmp2, &tmp3, &tmp4);
 		if (tmp3 & 0x2000000)
@@ -1221,11 +926,6 @@ int main(int argc, char **argv)
 	
 	if(strstr(Settings.PoolURLs[0], "stratum+tcp://"))
 		URLOffset = strlen("stratum+tcp://");
-	else if(strstr(Settings.PoolURLs[0], "daemon+tcp://"))
-	{
-		URLOffset = strlen("daemon+tcp://");
-		daemon = 1;
-	}
 	else
 		URLOffset = 0;
 	
@@ -1295,18 +995,6 @@ int main(int argc, char **argv)
 	}
 	Pool.sockfd = poolsocket;
 
-	if (daemon)
-	{
-	Log(LOG_NOTIFY, "Successfully connected to daemon.");
-
-	ret = pthread_create(&Stratum, NULL, DaemonThreadProc, (void *)&Pool);
-	if(ret)
-	{
-		printf("Failed to create Stratum thread.\n");
-		return(0);
-	}
-	} else
-	{
 	Log(LOG_NOTIFY, "Successfully connected to pool's stratum.");
 
 	ret = pthread_create(&Stratum, NULL, StratumThreadProc, (void *)&Pool);
@@ -1314,7 +1002,6 @@ int main(int argc, char **argv)
 	{
 		printf("Failed to create Stratum thread.\n");
 		return(0);
-	}
 	}
 
 	// Wait until we've gotten work and filled
@@ -1327,13 +1014,7 @@ int main(int argc, char **argv)
 	}
 	
 	// Work is ready - time to create the broadcast and miner threads
-	if (daemon)
-	{
-	pthread_create(&BroadcastThread, NULL, DaemonUpdateThreadProc, (void *)&Pool);
-	} else
-	{
 	pthread_create(&BroadcastThread, NULL, PoolBroadcastThreadProc, (void *)&Pool);
-	}
 	
 	for(int i = 0; i < Settings.TotalThreads; ++i)
 	{

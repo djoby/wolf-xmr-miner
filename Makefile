@@ -1,6 +1,6 @@
 CC		= gcc
 LD		= $(CC)
-OPT 		= -march=armv8-a+crypto+crc+lse -O2 -std=c11 -pthread
+OPT 		= -march=armv8-a+crypto+crc+lse -O2 -std=c11 -pthread 
 CFLAGS 		= -D_POSIX_SOURCE -D_GNU_SOURCE $(OPT)
 LDFLAGS		= $(OPT)
 LIBS		= -ljansson -ldl -pthread
