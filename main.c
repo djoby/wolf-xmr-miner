@@ -87,7 +87,6 @@ typedef struct _PoolBroadcastInfo
 	WorkerInfo WorkerData;
 } PoolBroadcastInfo;
 
-// AlgoName must not be freed by the thread - cleanup is done by caller.
 // RequestedWorksize and RequestedxIntensity should be zero if none was requested
 typedef struct _MinerThreadInfo
 {
@@ -95,35 +94,14 @@ typedef struct _MinerThreadInfo
 	uint32_t TotalMinerThreads;
 } MinerThreadInfo;
 
-// Signed types indicate there is no default value
-// If they are negative, do not set them.
-typedef struct _DeviceSettings
-{
-	uint32_t Platform;
-	uint32_t Index;
-	uint32_t Threads;
-	uint32_t rawIntensity;
-	uint32_t Worksize;
-	int32_t CoreFreq;
-	int32_t MemFreq;
-	int32_t FanSpeedPercent;
-	int32_t PowerTune;
-} DeviceSettings;
-
 // Settings structure for a group of threads mining one algo.
-// These threads may be running on diff GPUs, and there may
-// be multiple threads per GPU.
-typedef struct _AlgoSettings
+typedef struct _Settings
 {
-	char *AlgoName;
-	uint32_t NumGPUs;
-	DeviceSettings *GPUSettings;
 	uint32_t TotalThreads;
 	uint32_t PoolCount;
 	char **PoolURLs;
 	WorkerInfo *Workers;
-	json_t *AlgoSpecificConfig;
-} AlgoSettings;
+} Settings;
 // }}} Typedefs
 
 // {{{ Globals
@@ -632,12 +610,8 @@ BOOL SigHandler(DWORD signal)
 }
 #endif
 
-int ParseConfigurationFile(char *ConfigFileName, AlgoSettings *Settings)
+int ParseConfigurationFile(char *ConfigFileName, Settings *Settings)
 {
-	/* TODO: let s start here
-	 *
-	 */
-
 	json_t *Config;
 	json_error_t Error;
 	
@@ -648,158 +622,21 @@ int ParseConfigurationFile(char *ConfigFileName, AlgoSettings *Settings)
 		Log(LOG_CRITICAL, "Error loading configuration file: %s on line %d.", Error.text, Error.line);
 		return(-1);
 	}
-	
-	json_t *AlgoObjArr = json_object_get(Config, "Algorithms");
-	if(!AlgoObjArr)
-	{
-		Log(LOG_CRITICAL, "No 'Algorithms' array found");
-		return(-1);
-	}
-	
-	if(!json_array_size(AlgoObjArr))
-	{
-		Log(LOG_CRITICAL, "Algorithms array empty!");
-		return(-1);
-	}
-	
-	json_t *AlgoObj = json_array_get(AlgoObjArr, 0);
-	
-	json_t *AlgoName = json_object_get(AlgoObj, "name");
-	
-	if(!AlgoName || !json_is_string(AlgoName))
-	{
-		Log(LOG_CRITICAL, "Algorithm name missing or not a string.");
-		return(-1);
-	}
-	
-	json_t *DevsArr = json_object_get(AlgoObj, "devices");
-	
-	if(!DevsArr || !json_array_size(DevsArr))
-	{
-		Log(LOG_CRITICAL, "No devices specified for algorithm %s.", json_string_value(AlgoName));
-		return(-1);
-	}
-	
-	Settings->NumGPUs = json_array_size(DevsArr);
-	
-	Settings->GPUSettings = (DeviceSettings *)malloc(sizeof(DeviceSettings) * Settings->NumGPUs);
-	Settings->TotalThreads = 0;
-	
-	for(int i = 0; i < Settings->NumGPUs; ++i)
-	{
-		json_t *DeviceObj = json_array_get(DevsArr, i);
-		json_t *num = json_object_get(DeviceObj, "index");
-		
-		if(!num || !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Device structure #%d for algo %s has no index.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		Settings->GPUSettings[i].Index = json_integer_value(num);
-		
-		num = json_object_get(DeviceObj, "rawintensity");
-		
-		if(!num || !json_is_integer(num) || !json_integer_value(num))
-		{
-			Log(LOG_CRITICAL, "Device structure #%d for algo %s has no rawintensity, or rawintensity is set to zero.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		Settings->GPUSettings[i].rawIntensity = json_integer_value(num);
-		
-		num = json_object_get(DeviceObj, "worksize");
-		
-		if(!num || !json_is_integer(num) || !json_integer_value(num))
-		{
-			Log(LOG_CRITICAL, "Device structure #%d for algo %s has no worksize, or worksize is set to zero.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		Settings->GPUSettings[i].Worksize = json_integer_value(num);
-		
-		// Optional
-		num = json_object_get(DeviceObj, "threads");
-		
-		if(num && !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Argument to threads in device structure #%d for algo %s is not an integer.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		if(num) Settings->GPUSettings[i].Threads = json_integer_value(num);
-		else Settings->GPUSettings[i].Threads = 1;
-		
-		Settings->TotalThreads += Settings->GPUSettings[i].Threads;
-		
-		num = json_object_get(DeviceObj, "corefreq");
-		
-		if(num && !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Argument to corefreq in device structure #%d for algo %s is not an integer.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		if(num) Settings->GPUSettings[i].CoreFreq = json_integer_value(num);
-		else Settings->GPUSettings[i].CoreFreq = -1;
-		
-		num = json_object_get(DeviceObj, "memfreq");
-		
-		if(num && !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Argument to memfreq in device structure #%d for algo %s is not an integer.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		if(num) Settings->GPUSettings[i].MemFreq = json_integer_value(num);
-		else Settings->GPUSettings[i].MemFreq = -1;
-		
-		num = json_object_get(DeviceObj, "fanspeed");
-		
-		if(num && !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Argument to fanspeed in device structure #%d for algo %s is not an integer.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		if(num && ((json_integer_value(num) > 100) || (json_integer_value(num) < 0)))
-		{
-			Log(LOG_CRITICAL, "Argument to fanspeed in device structure #%d for algo %s is not a valid percentage (0 - 100).", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-		}
-		
-		if(num) Settings->GPUSettings[i].FanSpeedPercent = json_integer_value(num);
-		else Settings->GPUSettings[i].FanSpeedPercent = -1;
-		
-		num = json_object_get(DeviceObj, "powertune");
-		
-		if(num && !json_is_integer(num))
-		{
-			Log(LOG_CRITICAL, "Argument to powertune in device structure #%d for algo %s is not an integer.", i, json_string_value(AlgoName));
-			free(Settings->GPUSettings);
-			return(-1);
-		}
-		
-		if(num) Settings->GPUSettings[i].PowerTune = json_integer_value(num);
-		else Settings->GPUSettings[i].PowerTune = 0;
-	}
-	
-	// Remove the devices part from the algo object; it's
-	// not part of the algo specific options.
-	json_object_del(AlgoObj, "devices");
-	
-	json_t *PoolsArr = json_object_get(AlgoObj, "pools");
-	
+  
+  json_t *num = json_object_get(Config, "threads");
+  if(num && !json_is_integer(num))
+  {
+    Log(LOG_CRITICAL, "Argument to threads for algo CryptoNight is not an integer.");
+    return(-1);
+  }
+  
+  if(num) Settings->TotalThreads = json_integer_value(num);
+  else Settings->TotalThreads = 1;
+
+	json_t *PoolsArr = json_object_get(Config, "pools");
 	if(!PoolsArr || !json_array_size(PoolsArr))
 	{
-		Log(LOG_CRITICAL, "No pools specified for algorithm %s.", json_string_value(AlgoName));
+		Log(LOG_CRITICAL, "No pools specified for algorithm CryptoNight.");
 		return(-1);
 	}
 	
@@ -816,7 +653,7 @@ int ParseConfigurationFile(char *ConfigFileName, AlgoSettings *Settings)
 		
 		if(!PoolURL || !PoolUser || !PoolPass)
 		{
-			Log(LOG_CRITICAL, "Pool structure %d for algo %s is missing a URL, username, or password.", i, json_string_value(AlgoName));
+			Log(LOG_CRITICAL, "Pool structure %d for algo CryptoNight is missing an URL, username, or password.", i);
 			return(-1);
 		}
 		
@@ -831,23 +668,11 @@ int ParseConfigurationFile(char *ConfigFileName, AlgoSettings *Settings)
 		Settings->Workers[i].NextWorker = NULL;
 	}
 	
-	// Remove the pools part from the algo object; it's
-	// not part of the algo specific options.
-	json_object_del(AlgoObj, "pools");
-	
-	Settings->AlgoSpecificConfig = AlgoObj;
-	
-	Settings->AlgoName = (char *)malloc(sizeof(char) * (strlen(json_string_value(AlgoName)) + 1));
-	strcpy(Settings->AlgoName, json_string_value(AlgoName));
-	
 	return(0);
 }
 
-void FreeSettings(AlgoSettings *Settings)
+void FreeSettings(Settings *Settings)
 {
-	free(Settings->AlgoName);
-	free(Settings->GPUSettings);
-	
 	for(int i = 0; i < Settings->PoolCount; ++i)
 	{
 		free(Settings->PoolURLs[i]);
@@ -870,7 +695,7 @@ void FreeSettings(AlgoSettings *Settings)
 int main(int argc, char **argv)
 {
 	PoolInfo Pool = {0};
-	AlgoSettings Settings;
+	Settings Settings;
 	MinerThreadInfo *MThrInfo;
 	int ret, poolsocket;
 	pthread_t Stratum, BroadcastThread, *MinerWorker;
@@ -963,7 +788,7 @@ int main(int argc, char **argv)
 	Pool.MinerThreadCount = Settings.TotalThreads;
 	Pool.MinerThreads = (uint32_t *)malloc(sizeof(uint32_t) * Pool.MinerThreadCount);
 	
-	for(int i = 0; i < Settings.TotalThreads; ++i) Pool.MinerThreads[i] = Settings.GPUSettings[i].Index;
+	for(int i = 0; i < Settings.TotalThreads; ++i) Pool.MinerThreads[i] = -1;
 	
 	GlobalStatus.ThreadHashCounts = (double *)malloc(sizeof(double) * Settings.TotalThreads);
 	GlobalStatus.ThreadTimes = (double *)malloc(sizeof(double) * Settings.TotalThreads);
@@ -979,14 +804,11 @@ int main(int argc, char **argv)
 	
 	for(int i = 0; i < Settings.TotalThreads; ++i) atomic_init(RestartMining + i, false);
 	
-	for(int ThrIdx = 0, GPUIdx = 0; ThrIdx < Settings.TotalThreads && GPUIdx < Settings.NumGPUs; ThrIdx += Settings.GPUSettings[GPUIdx].Threads, ++GPUIdx)
-	{
-		for(int x = 0; x < Settings.GPUSettings[GPUIdx].Threads; ++x)
-		{
-			MThrInfo[ThrIdx + x].ThreadID = ThrIdx + x;
-			MThrInfo[ThrIdx + x].TotalMinerThreads = Settings.TotalThreads;
-		}
-	}
+  for(int x = 0; x < Settings.TotalThreads; ++x)
+  {
+    MThrInfo[x].ThreadID = x;
+    MThrInfo[x].TotalMinerThreads = Settings.TotalThreads;
+  }
 
 	// TODO: Have ConnectToPool() return a Pool struct
 	poolsocket = ConnectToPool(StrippedPoolURL, TmpPort);
