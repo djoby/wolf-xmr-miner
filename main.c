@@ -641,6 +641,11 @@ int ParseConfigurationFile(char *ConfigFileName, Settings *Settings)
   if(num) Settings->TotalThreads = json_integer_value(num);
   else Settings->TotalThreads = 1;
 
+  if (Settings->TotalThreads >= sysconf(_SC_NPROCESSORS_ONLN)) {
+    Log(LOG_CRITICAL, "Argument threads s too high for algo CryptoNight (max: cores - 1).");
+    return(-1);
+  }
+
 	json_t *PoolsArr = json_object_get(Config, "pools");
 	if(!PoolsArr || !json_array_size(PoolsArr))
 	{
@@ -702,6 +707,7 @@ void FreeSettings(Settings *Settings)
 // TODO/FIXME: Check functions called for error.
 int main(int argc, char **argv)
 {
+  cpu_set_t cpuset;
 	PoolInfo Pool = {0};
 	Settings Settings;
 	MinerThreadInfo *MThrInfo;
@@ -835,6 +841,15 @@ int main(int argc, char **argv)
 		printf("Failed to create Stratum thread.\n");
 		return(0);
 	}
+  CPU_ZERO(&cpuset);
+  CPU_SET(0, &cpuset);
+  ret = pthread_setaffinity_np(Stratum, sizeof(cpu_set_t), &cpuset);
+  if (ret != 0)
+  {
+    printf("Stratum: Affinity failed.\n");
+    return(0);
+  }
+
 
 	// Wait until we've gotten work and filled
 	// up the job structure before launching the
@@ -847,16 +862,31 @@ int main(int argc, char **argv)
 	
 	// Work is ready - time to create the broadcast and miner threads
 	pthread_create(&BroadcastThread, NULL, PoolBroadcastThreadProc, (void *)&Pool);
+  CPU_ZERO(&cpuset);
+  CPU_SET(0, &cpuset);
+  ret = pthread_setaffinity_np(BroadcastThread, sizeof(cpu_set_t), &cpuset);
+  if (ret != 0)
+  {
+    printf("Broadcast: Affinity failed.\n");
+    return(0);
+  }
 	
 	for(int i = 0; i < Settings.TotalThreads; ++i)
 	{
 		ret = pthread_create(MinerWorker + i, NULL, MinerThreadProc, MThrInfo + i);
-		
 		if(ret)
 		{
 			printf("Failed to create MinerWorker thread.\n");
 			return(0);
 		}
+    CPU_ZERO(&cpuset);
+    CPU_SET(i+1, &cpuset);
+    ret = pthread_setaffinity_np(MinerWorker[i], sizeof(cpu_set_t), &cpuset);
+    if (ret != 0)
+    {
+      printf("Miner[%d]: Affinity failed.\n", i);
+      return(0);
+    }
 	}
 	
 	char c;
