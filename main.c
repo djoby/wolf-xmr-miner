@@ -1796,61 +1796,6 @@ int main(int argc, char **argv)
 		GlobalStatus.ThreadTimes[i] = 0;
 	}
 	
-	// Initialize ADL and apply settings to card
-	
-	/*ADLInit();
-	
-	for(int i = 0; i < Settings.NumGPUs; ++i)
-	{
-		ADLAdapterDynInfo Info;
-		
-		ret = ADLGetStateInfo(Settings.GPUSettings[i].Index, &Info);
-		
-		if(ret)
-			Log(LOG_ERROR, "ADLGetStateInfo() failed for GPU #%d with code %d.", Settings.GPUSettings[i].Index, ret);
-		
-		Log(LOG_INFO, "Adapter #%d - Fan Speed: %dRPM; Core Clock: %dMhz; Mem Clock: %dMhz; Core Voltage: %dmV; PowerTune: %d; Temp: %.03fC", Settings.GPUSettings[i].Index, Info.FanSpeedRPM, Info.CoreClock, Info.MemClock, Info.CoreVolts, Info.PowerTune, Info.Temp);
-		
-		if(Settings.GPUSettings[i].FanSpeedPercent >= 0)
-		{
-			ret = ADLSetFanspeed(Settings.GPUSettings[i].Index, Settings.GPUSettings[i].FanSpeedPercent);
-			
-			if(ret)
-				Log(LOG_ERROR, "ADLSetFanspeed() failed for GPU #%d with code %d.", Settings.GPUSettings[i].Index, ret);
-			else
-				Log(LOG_INFO, "Setting fan speed for GPU #%d to %d%% succeeded.", Settings.GPUSettings[i].Index, Settings.GPUSettings[i].FanSpeedPercent);
-		}
-		
-		// If either of these are positive, a call to ADLSetClocks is needed
-		if((Settings.GPUSettings[i].CoreFreq >= 0) || (Settings.GPUSettings[i].MemFreq >= 0))
-		{
-			// If corefreq wasn't set, set memfreq. If memfreq wasn't, vice versa.
-			// If both were set, then set both.
-			if(Settings.GPUSettings[i].CoreFreq < 0)
-				ret = ADLSetClocks(Settings.GPUSettings[i].Index, 0, Settings.GPUSettings[i].MemFreq);
-			else if(Settings.GPUSettings[i].MemFreq < 0)
-				ret = ADLSetClocks(Settings.GPUSettings[i].Index, Settings.GPUSettings[i].CoreFreq, 0);
-			else
-				ret = ADLSetClocks(Settings.GPUSettings[i].Index, Settings.GPUSettings[i].CoreFreq, Settings.GPUSettings[i].MemFreq);
-			
-			if(ret)
-				Log(LOG_ERROR, "ADLSetClocks() failed for GPU #%d with code %d.", Settings.GPUSettings[i].Index, ret);
-			else
-				Log(LOG_INFO, "Setting clocks on GPU #%d to %d/%d succeeded.", Settings.GPUSettings[i].Index, Settings.GPUSettings[i].CoreFreq, Settings.GPUSettings[i].MemFreq);
-		}
-		
-		if(Settings.GPUSettings[i].PowerTune)
-		{
-			ret = ADLSetPowertune(Settings.GPUSettings[i].Index, Settings.GPUSettings[i].PowerTune);
-			
-			if(ret < 0) Log(LOG_ERROR, "ADLSetPowertune failed for GPU #%d with code %d.", Settings.GPUSettings[i].Index, ret);
-			else Log(LOG_INFO, "Setting powertune on GPU #%d to %d succeeded.", Settings.GPUSettings[i].Index, Settings.GPUSettings[i].PowerTune);
-		}
-	}
-	
-	Log(LOG_INFO, "Sleeping for 10s to allow fan to spin up/down...");
-	sleep(10);*/
-	
 	for(int i = 0; i < Settings.TotalThreads; ++i) atomic_init(RestartMining + i, false);
 	
 	Log(LOG_NOTIFY, "Setting up GPU(s).");
@@ -1963,54 +1908,19 @@ int main(int argc, char **argv)
 		}
 	}
 	
-	/*
-	AlgoContext ctx;
-	
-	uint8_t TestInput[80];
-	uint8_t TestOutput[64];
-	
-	for(int i = 0; i < 76; ++i) TestInput[i] = i;
-	
-	//TestInput[75] = 6;
-	
-	SetupXMRTest(&ctx, &PlatformContext, 0);
-	RunXMRTest(&ctx, &PlatformContext, TestInput, TestOutput, 0);
-	
-	printf("Output: ");
-	
-	for(int i = 0; i < 32; ++i) printf("%02X", TestOutput[i]);
-	
-	putchar('\n');
-	*/
-	//json_decref(Settings.AlgoSpecificConfig);
-	
-	//pthread_create(&ADLThread, NULL, ADLInfoGatherThreadProc, NULL);
-	
 	char c;
 	read(ExitPipe[0], &c, 1);
 	
-	//pthread_join(Stratum, NULL);
-	
-	//pthread_cancel(Stratum);
-	//pthread_cancel(ADLThread);
 	
 #ifndef __ANDROID__
 	for(int i = 0; i < Settings.TotalThreads; ++i) pthread_cancel(MinerWorker[i]);
 #endif
-	
 	if (numGPUs)
 		ReleaseOpenCLPlatformContext(&PlatformContext);
-	
-	//ADLRelease();
-	
 	FreeSettings(&Settings);
 	free(RestartMining);
 	free(Pool.MinerThreads);
-	
-	//pthread_cancel(BroadcastThread);
-	
 	closesocket(poolsocket);
-	
 	NetworkingShutdown();
 	
 	printf("Stratum thread terminated.\n");
