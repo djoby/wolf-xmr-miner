@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 #include <jansson.h>
-#include "ocl.h"
-
-int32_t InitHashAlgoByName(char *HashName, AlgoContext *HashData, OCLPlatform *OCL, uint32_t DeviceIdx, json_t *AlgoSpecificOpts);
 
 #define ERR_SUCCESS				0
 #define ERR_STUPID_PARAMS		-1

@@ -9,7 +9,6 @@
 #ifdef __linux__
 #include <sys/mman.h>
 #endif
-#include "crypto/oaes_lib.h"
 #include "crypto/c_keccak.h"
 #include "crypto/c_groestl.h"
 #include "crypto/c_blake256.h"
@@ -130,7 +129,6 @@ struct cryptonight_ctx {
 	uint8_t a[AES_BLOCK_SIZE] __attribute__((aligned(16)));
 	uint8_t b[AES_BLOCK_SIZE] __attribute__((aligned(16)));
 	uint8_t c[AES_BLOCK_SIZE] __attribute__((aligned(16)));
-	oaes_ctx* aes_ctx;
 };
 
 struct cryptonight_aesni_ctx {
@@ -140,18 +138,14 @@ struct cryptonight_aesni_ctx {
     uint64_t a[AES_BLOCK_SIZE >> 3] __attribute__((aligned(16)));
     uint64_t b[AES_BLOCK_SIZE >> 3] __attribute__((aligned(16)));
     uint8_t c[AES_BLOCK_SIZE] __attribute__((aligned(16)));
-    oaes_ctx* aes_ctx;
 };
 
 #ifdef __x86_64__
 void cryptonight_hash_dumb(void* output, const void* input, const uint32_t inlen, struct cryptonight_ctx* ctx) {
 	size_t i, j;
 	keccak1600(input, inlen, (uint8_t *)&ctx->state.hs);
-	if (!ctx->aes_ctx)
-		ctx->aes_ctx = (oaes_ctx*) oaes_alloc();
 	memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
 	
-	oaes_key_import_data(ctx->aes_ctx, ctx->state.hs.b, AES_KEY_SIZE);
 	for (i = 0; (i < MEMORY); i += INIT_SIZE_BYTE) {
 		aesb_pseudo_round_mut(&ctx->text[AES_BLOCK_SIZE * 0], ctx->aes_ctx->key->exp_data);
 		aesb_pseudo_round_mut(&ctx->text[AES_BLOCK_SIZE * 1], ctx->aes_ctx->key->exp_data);
@@ -187,7 +181,6 @@ void cryptonight_hash_dumb(void* output, const void* input, const uint32_t inlen
 	}
 
 	memcpy(ctx->text, ctx->state.init, INIT_SIZE_BYTE);
-	oaes_key_import_data(ctx->aes_ctx, &ctx->state.hs.b[32], AES_KEY_SIZE);
 	for (i = 0; (i < MEMORY); i += INIT_SIZE_BYTE) {
 		xor_blocks(&ctx->text[0 * AES_BLOCK_SIZE], &ctx->long_state[i + 0 * AES_BLOCK_SIZE]);
 		aesb_pseudo_round_mut(&ctx->text[0 * AES_BLOCK_SIZE], ctx->aes_ctx->key->exp_data);
@@ -439,7 +432,6 @@ struct cryptonight_aesv8_ctx {
     uint64_t a[AES_BLOCK_SIZE >> 3] __attribute__((aligned(16)));
     uint64_t b[AES_BLOCK_SIZE >> 3] __attribute__((aligned(16)));
     uint64_t c[AES_BLOCK_SIZE >> 3] __attribute__((aligned(16)));
-    oaes_ctx* aes_ctx;
 };
 
 /* ARMv8-A optimized with NEON and AES instructions.

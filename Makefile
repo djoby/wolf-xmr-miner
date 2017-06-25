@@ -3,10 +3,10 @@ LD		= $(CC)
 OPT 		= -march=armv8-a+crypto+crc+lse -O2 -std=c11 -pthread
 CFLAGS 		= -D_POSIX_SOURCE -D_GNU_SOURCE $(OPT)
 LDFLAGS		= $(OPT)
-LIBS		= -ljansson -lOpenCL -ldl -pthread
+LIBS		= -ljansson -ldl -pthread
 OBJS		= crypto/c_blake256.o \
 		crypto/c_groestl.o crypto/c_keccak.o crypto/c_jh.o crypto/c_skein.o \
-		cryptonight.o log.o net.o minerutils.o gpu.o main.o
+		cryptonight.o log.o net.o minerutils.o main.o
 
 all: $(OBJS)
 	$(LD) $(LDFLAGS) -o miner $(OBJS) $(LIBS)
