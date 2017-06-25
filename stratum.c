@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <string.h>
-#include "sha256.h"
 #include "stratum.h"
 #include "minerutils.h"
 

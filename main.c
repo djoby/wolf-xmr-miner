@@ -26,7 +26,6 @@
 #include "minerutils.h"
 #include "minerlog.h"
 #include "minernet.h"
-#include "stratum.h"
 #include "miner.h"
 // }}} Includes
 
@@ -37,6 +36,15 @@
 // }}} Defines
 
 // {{{ Typedefs
+typedef struct _JobInfo
+{
+	uint64_t XMRTarget;
+	uint8_t ID[32];
+	uint8_t XMRBlob[128];
+	uint32_t XMRBlobLen;
+	char *blockblob;
+} JobInfo;
+
 typedef struct _StatusInfo
 {
 	uint64_t SolvedWork;
