@@ -641,10 +641,10 @@ int ParseConfigurationFile(char *ConfigFileName, Settings *Settings)
   if(num) Settings->TotalThreads = json_integer_value(num);
   else Settings->TotalThreads = 1;
 
-  if (Settings->TotalThreads >= sysconf(_SC_NPROCESSORS_ONLN)) {
-    Log(LOG_CRITICAL, "Argument threads s too high for algo CryptoNight (max: cores - 1).");
-    return(-1);
-  }
+//  if (Settings->TotalThreads > sysconf(_SC_NPROCESSORS_ONLN)) {
+//    Log(LOG_CRITICAL, "Argument threads s too high for algo CryptoNight (max: cores - 1).");
+//    return(-1);
+//  }
 
 	json_t *PoolsArr = json_object_get(Config, "pools");
 	if(!PoolsArr || !json_array_size(PoolsArr))
@@ -879,14 +879,17 @@ int main(int argc, char **argv)
 			printf("Failed to create MinerWorker thread.\n");
 			return(0);
 		}
+    int ncpu = i % sysconf(_SC_NPROCESSORS_ONLN);
     CPU_ZERO(&cpuset);
-    CPU_SET(i+1, &cpuset);
+    CPU_SET(ncpu, &cpuset);
     ret = pthread_setaffinity_np(MinerWorker[i], sizeof(cpu_set_t), &cpuset);
     if (ret != 0)
     {
       printf("Miner[%d]: Affinity failed.\n", i);
       return(0);
     }
+    else
+      Log(LOG_INFO, "Miner[%d] on cpu%d", i, ncpu);
 	}
 	
 	char c;
