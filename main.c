@@ -494,7 +494,7 @@ reauth:
     
 					pthread_mutex_lock(&StatusMutex);
           double TotalHasrate = 0;
-          for(int i = 0; i < 12; ++i)
+          for(int i = 0; i < Pool->MinerThreadCount; ++i)
           {
             TotalHasrate += GlobalStatus.ThreadHashCounts[i] / GlobalStatus.ThreadTimes[i];
           }
