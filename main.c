@@ -115,7 +115,7 @@ typedef struct _Settings
 // {{{ Globals
 pthread_mutex_t StatusMutex = PTHREAD_MUTEX_INITIALIZER;
 
-StatusInfo GlobalStatus;
+static StatusInfo GlobalStatus;
 
 static cryptonight_func *cryptonight_hash_ctx;
 
@@ -251,7 +251,7 @@ void *StratumThreadProc(void *InfoPtr)
 	
 	len = snprintf(s, JSON_BUF_LEN, "{\"method\": \"login\", \"params\": "
 		"{\"login\": \"%s\", \"pass\": \"%s\", "
-		"\"agent\": \"wolf-hyc-xmr-miner/0.1\"}, \"id\": 1}\r\n\n",
+		"\"agent\": \"xmr-wolf-miner/1.0\"}, \"id\": 1}\r\n\n",
 		Pool->WorkerData.User, Pool->WorkerData.Pass);
 
 	Log(LOG_NETDEBUG, "Request: %s", s);
@@ -373,7 +373,6 @@ reauth:
 				// Otherwise, it's the first job.
 				if(!authid)
 				{
-					double TotalHashrate = 0;
 					json_t *result = json_object_get(msg, "result");
 					json_t *err = json_object_get(msg, "error");
 					
@@ -390,12 +389,13 @@ reauth:
 						errmsg = json_string_value(json_object_get(err, "message"));
 						Log(LOG_INFO, "Share rejected (%s): %d/%d (%.02f%%)", errmsg, GlobalStatus.SolvedWork - GlobalStatus.RejectedWork, GlobalStatus.SolvedWork, (double)(GlobalStatus.SolvedWork - GlobalStatus.RejectedWork) / GlobalStatus.SolvedWork * 100.0);
 						if (!strcasecmp("Unauthenticated", errmsg)) {
-							RestartMiners(Pool);
 							pthread_mutex_unlock(&StatusMutex);
+							RestartMiners(Pool);
 							goto reauth;
 						}
 					}
 					
+          double TotalHashrate = 0;
 					for(int i = 0; i < Pool->MinerThreadCount; ++i)
 					{
 						TotalHashrate += GlobalStatus.ThreadHashCounts[i] / GlobalStatus.ThreadTimes[i];
@@ -441,7 +441,7 @@ reauth:
 					CurrentJob = NextJob;
 					JobIdx++;
 					NextJob = &Jobs[JobIdx&1];
-					Log(LOG_NOTIFY, "New job at diff %g", (double)0xffffffff / CurrentJob->XMRTarget);
+					Log(LOG_NOTIFY, "First job at diff %g", (double)0xffffffff / CurrentJob->XMRTarget);
 					CurrentJob->XMRTarget <<= 32;
 					CurrentJob->XMRTarget |= 0xffffffff;
 				}
@@ -491,6 +491,17 @@ reauth:
 					JobIdx++;
 					NextJob = &Jobs[JobIdx&1];
 					
+    
+					pthread_mutex_lock(&StatusMutex);
+          double TotalHasrate = 0;
+          for(int i = 0; i < 12; ++i)
+          {
+            TotalHasrate += GlobalStatus.ThreadHashCounts[i] / GlobalStatus.ThreadTimes[i];
+          }
+          
+          Log(LOG_INFO, "Total Hashrate: %.02fH/s\n", TotalHasrate);
+					pthread_mutex_unlock(&StatusMutex);
+
 					// No cleanjobs param, so we flush every time
 					RestartMiners(Pool);
 						
@@ -515,6 +526,7 @@ reauth:
 void *MinerThreadProc(void *Info)
 {
 	int MyJobIdx;
+  TIME_TYPE begin, end;
 	JobInfo *MyJob;
 	char ThrID[128];
 	uint32_t TmpWork[32];
@@ -526,6 +538,10 @@ void *MinerThreadProc(void *Info)
 	struct cryptonight_ctx *ctx;
 	uint32_t *nonceptr = (uint32_t *)((char *)TmpWork + 39);
 	unsigned long hashes_done;
+  uint32_t n;
+  uint64_t hash[32/8] __attribute__((aligned(64)));
+  int found;
+  double Seconds;
 	
 	// Generate work for first run.
 	MyJobIdx = JobIdx;
@@ -539,8 +555,6 @@ void *MinerThreadProc(void *Info)
 	
 	while(!ExitFlag)
 	{
-		TIME_TYPE begin, end;
-		
 		atomic_store(RestartMining + MTInfo->ThreadID, false);
 		
 		// If JobID is not equal to the current job ID, generate new work
@@ -560,9 +574,8 @@ void *MinerThreadProc(void *Info)
 				++(*nonceptr);
 		begin = MinerGetCurTime();
 		const uint32_t first_nonce = *nonceptr;
-		uint32_t n = first_nonce - 1;
-		uint64_t hash[32/8] __attribute__((aligned(64)));
-		int found = 0;
+		n = first_nonce - 1;
+		found = 0;
 		do {
 			if (ExitFlag) break;
 			*nonceptr = ++n;
@@ -573,7 +586,7 @@ void *MinerThreadProc(void *Info)
 				found = 2;
 			}
 		} while (!found && n < MaxNonce);
-		hashes_done = n - first_nonce;
+		end = MinerGetCurTime();
 		if (found == 1) {
 			Log(LOG_DEBUG, "%s: SHARE found (nonce 0x%.8X)!", ThrID, *nonceptr);
 			pthread_mutex_lock(&QueueMutex);
@@ -588,11 +601,9 @@ void *MinerThreadProc(void *Info)
 			pthread_cond_signal(&QueueCond);
 			pthread_mutex_unlock(&QueueMutex);
 		}
-		
-		end = MinerGetCurTime();
-		double Seconds = SecondsElapsed(begin, end);
-		
 		pthread_mutex_lock(&StatusMutex);
+		hashes_done = n - first_nonce;
+		Seconds = SecondsElapsed(begin, end);
 		GlobalStatus.ThreadHashCounts[MTInfo->ThreadID] = hashes_done;
 		GlobalStatus.ThreadTimes[MTInfo->ThreadID] = Seconds;
 		pthread_mutex_unlock(&StatusMutex);
@@ -882,7 +893,7 @@ int main(int argc, char **argv)
     int ncpu = i % sysconf(_SC_NPROCESSORS_ONLN);
     CPU_ZERO(&cpuset);
     CPU_SET(ncpu, &cpuset);
-    ret = pthread_setaffinity_np(MinerWorker[i], sizeof(cpu_set_t), &cpuset);
+    ret = pthread_setaffinity_np(*(MinerWorker + i), sizeof(cpu_set_t), &cpuset);
     if (ret != 0)
     {
       printf("Miner[%d]: Affinity failed.\n", i);
